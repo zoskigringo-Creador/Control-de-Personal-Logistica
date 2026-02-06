@@ -2,8 +2,14 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>LOGÍSTICA - Control de Personal</title>
+    
+    <!-- Meta tags para modo Pantalla Completa (Mobile Web App) -->
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#2563eb">
     
     <!-- Librerías Externas (React, Tailwind, PDF) -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -24,6 +30,36 @@
     <!-- Babel para traducir JSX en el navegador -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
+    <!-- Manifiesto PWA embebido para Android -->
+    <link rel="manifest" id="my-manifest">
+    <script>
+        const manifest = {
+            "name": "Logística App",
+            "short_name": "Logística",
+            "start_url": ".",
+            "display": "standalone",
+            "background_color": "#ffffff",
+            "theme_color": "#2563eb",
+            "orientation": "portrait",
+            "icons": [
+                {
+                    "src": "https://cdn-icons-png.flaticon.com/512/716/716736.png",
+                    "sizes": "192x192",
+                    "type": "image/png"
+                },
+                {
+                    "src": "https://cdn-icons-png.flaticon.com/512/716/716736.png",
+                    "sizes": "512x512",
+                    "type": "image/png"
+                }
+            ]
+        };
+        const stringManifest = JSON.stringify(manifest);
+        const blob = new Blob([stringManifest], {type: 'application/json'});
+        const manifestURL = URL.createObjectURL(blob);
+        document.querySelector('#my-manifest').setAttribute('href', manifestURL);
+    </script>
+
     <style>
         .animate-fade-in { animation: fadeIn 0.5s ease-out; }
         .animate-in { animation: slideIn 0.3s ease-out; }
@@ -32,9 +68,11 @@
         /* Scrollbar oculto para móviles */
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        /* Evitar selección de texto accidental en app mode */
+        body { -webkit-tap-highlight-color: transparent; }
     </style>
 </head>
-<body class="bg-slate-100">
+<body class="bg-slate-100 overscroll-none">
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
@@ -43,7 +81,8 @@
         import { 
           Truck, Users, Moon, Sun, FileSpreadsheet, FileText, CheckCircle2, 
           AlertCircle, UserMinus, UserX, UserPlus, Settings, X, Search, 
-          Plus, ToggleLeft, ToggleRight, CheckSquare, Trash2 
+          Plus, ToggleLeft, ToggleRight, CheckSquare, Trash2, RotateCcw, 
+          Cloud, Check, Loader2
         } from 'lucide-react';
 
         // --- DATOS INICIALES ---
@@ -105,6 +144,16 @@
             { id: 48, name: "Gustavo Caceres", role: "Entregador", isDriver: true },
         ];
 
+        // Definimos la estructura vacía (para el botón de reset)
+        const createEmptyAssignments = () => {
+            const empty = {};
+            INITIAL_TRUCKS.forEach(truckId => {
+                empty[truckId] = { driver: null, helper1: null, helper2: null, observation: "" };
+            });
+            return empty;
+        };
+
+        // Asignaciones por defecto (FOTO)
         const INITIAL_ASSIGNMENTS = {
             "C15": { driver: 1, helper1: 2, helper2: 3, observation: "" },
             "C16": { driver: 4, helper1: 5, helper2: null, observation: "" },
@@ -310,7 +359,7 @@
             );
         };
 
-        const SettingsModal = ({ isOpen, onClose, darkMode, toggleTheme, onOpenManageStaff }) => {
+        const SettingsModal = ({ isOpen, onClose, darkMode, toggleTheme, onOpenManageStaff, onResetDay }) => {
             if (!isOpen) return null;
             
             return (
@@ -342,6 +391,14 @@
                                 <Users size={20} />
                                 <span className="font-medium">Gestionar Personal</span>
                             </button>
+
+                            <button 
+                                onClick={onResetDay}
+                                className="w-full text-left p-3 rounded-lg flex items-center gap-3 hover:bg-red-50 text-red-600 dark:hover:bg-red-900/20 transition-colors mt-2 border-t border-slate-100 dark:border-slate-700"
+                            >
+                                <RotateCcw size={20} />
+                                <span className="font-bold">Reiniciar Día (Borrar Todo)</span>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -353,11 +410,14 @@
             const [darkMode, setDarkMode] = useState(false);
             const [currentView, setCurrentView] = useState('dashboard');
             const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+            const [saveStatus, setSaveStatus] = useState('saved'); // 'saved', 'saving'
             
+            // Estado principal
             const [assignments, setAssignments] = useState(INITIAL_ASSIGNMENTS);
             const [truckStatus, setTruckStatus] = useState({}); 
             const [staff, setStaff] = useState(INITIAL_STAFF_DATA);
             const [absentStaffIds, setAbsentStaffIds] = useState(new Set());
+            const [isDataLoaded, setIsDataLoaded] = useState(false);
 
             const [selectedSlot, setSelectedSlot] = useState(null); 
             const [showStaffModal, setShowStaffModal] = useState(false);
@@ -367,38 +427,94 @@
             const [newStaffData, setNewStaffData] = useState({ name: '', role: 'Ayudante', isDriver: false });
             const pdfLibraryLoaded = useRef(false);
 
+            // 1. CARGA INICIAL
             useEffect(() => {
                 const timer = setTimeout(() => setShowSplash(false), 2500);
 
-                const savedAssignments = localStorage.getItem('logistica_assignments');
-                const savedStatus = localStorage.getItem('logistica_status');
-                const savedDate = localStorage.getItem('logistica_date');
+                // Migración de datos legacy
+                const legacyAssignments = localStorage.getItem('logistica_assignments');
+                if (legacyAssignments) {
+                    const today = new Date().toISOString().split('T')[0];
+                    const legacyKey = `logistica_record_${today}`;
+                    if (!localStorage.getItem(legacyKey)) {
+                        const legacyData = {
+                            assignments: JSON.parse(legacyAssignments),
+                            truckStatus: JSON.parse(localStorage.getItem('logistica_status') || '{}'),
+                            absentStaffIds: JSON.parse(localStorage.getItem('logistica_absent') || '[]')
+                        };
+                        localStorage.setItem(legacyKey, JSON.stringify(legacyData));
+                    }
+                }
+
                 const savedStaff = localStorage.getItem('logistica_staff');
-                const savedAbsent = localStorage.getItem('logistica_absent');
+                if (savedStaff) setStaff(JSON.parse(savedStaff));
 
-                if (savedDate === date) {
-                    if (savedAssignments) setAssignments(JSON.parse(savedAssignments));
-                    if (savedStatus) setTruckStatus(JSON.parse(savedStatus));
-                    if (savedAbsent) setAbsentStaffIds(new Set(JSON.parse(savedAbsent)));
-                }
-                if (savedStaff) {
-                    setStaff(JSON.parse(savedStaff));
-                }
+                if (window.jspdf) pdfLibraryLoaded.current = true;
 
-                if (window.jspdf) {
-                    pdfLibraryLoaded.current = true;
-                }
+                // Protección contra salida
+                const handleBeforeUnload = (e) => { e.preventDefault(); e.returnValue = ''; return ''; };
+                window.addEventListener('beforeunload', handleBeforeUnload);
+                window.history.pushState({ app: 'home' }, document.title, window.location.href);
+                const handlePopState = (e) => {
+                    if (window.confirm("¿Seguro que deseas salir?")) { window.history.back(); } 
+                    else { window.history.pushState({ app: 'home' }, document.title, window.location.href); }
+                };
+                window.addEventListener('popstate', handlePopState);
 
-                return () => clearTimeout(timer);
+                return () => {
+                    clearTimeout(timer);
+                    window.removeEventListener('beforeunload', handleBeforeUnload);
+                    window.removeEventListener('popstate', handlePopState);
+                };
             }, []);
 
+            // 2. CARGAR DATOS AL CAMBIAR FECHA
             useEffect(() => {
-                localStorage.setItem('logistica_assignments', JSON.stringify(assignments));
-                localStorage.setItem('logistica_status', JSON.stringify(truckStatus));
-                localStorage.setItem('logistica_date', date);
-                localStorage.setItem('logistica_staff', JSON.stringify(staff));
-                localStorage.setItem('logistica_absent', JSON.stringify(Array.from(absentStaffIds)));
-            }, [assignments, truckStatus, date, staff, absentStaffIds]);
+                setIsDataLoaded(false); 
+                const recordKey = `logistica_record_${date}`;
+                const savedRecord = localStorage.getItem(recordKey);
+
+                if (savedRecord) {
+                    const parsed = JSON.parse(savedRecord);
+                    setAssignments(parsed.assignments || INITIAL_ASSIGNMENTS);
+                    setTruckStatus(parsed.truckStatus || {});
+                    setAbsentStaffIds(new Set(parsed.absentStaffIds || []));
+                } else {
+                    setAssignments(INITIAL_ASSIGNMENTS);
+                    setTruckStatus({});
+                    setAbsentStaffIds(new Set());
+                }
+                setTimeout(() => setIsDataLoaded(true), 50);
+            }, [date]);
+
+            // 3. GUARDADO AUTOMÁTICO VISUAL
+            useEffect(() => {
+                if (!isDataLoaded) return;
+
+                setSaveStatus('saving');
+                
+                const recordKey = `logistica_record_${date}`;
+                const dataToSave = {
+                    assignments,
+                    truckStatus,
+                    absentStaffIds: Array.from(absentStaffIds)
+                };
+                
+                try {
+                    localStorage.setItem(recordKey, JSON.stringify(dataToSave));
+                    localStorage.setItem('logistica_staff', JSON.stringify(staff));
+                    
+                    // Simular pequeño retardo para que el usuario vea que "algo pasó"
+                    setTimeout(() => setSaveStatus('saved'), 600);
+                } catch (e) {
+                    console.error("Error guardando", e);
+                    setSaveStatus('error');
+                }
+
+            }, [assignments, truckStatus, absentStaffIds, staff, date, isDataLoaded]);
+
+
+            // --- Lógica de Negocio (Inmutable para asegurar guardado) ---
 
             const getStaffById = (id) => staff.find(s => s.id === id);
 
@@ -420,21 +536,30 @@
                 if (!selectedSlot) return;
                 const { truckId, slotType } = selectedSlot;
 
-                const newAssignments = { ...assignments };
-                if (personId) {
-                    Object.keys(newAssignments).forEach(tId => {
-                        if (newAssignments[tId]?.driver === personId) newAssignments[tId].driver = null;
-                        if (newAssignments[tId]?.helper1 === personId) newAssignments[tId].helper1 = null;
-                        if (newAssignments[tId]?.helper2 === personId) newAssignments[tId].helper2 = null;
-                    });
-                }
+                setAssignments(prev => {
+                    const newAssignments = { ...prev };
+                    
+                    // Limpieza profunda de asignaciones previas
+                    if (personId) {
+                        Object.keys(newAssignments).forEach(tId => {
+                            // Copia superficial del camión para no mutar
+                            const truck = { ...newAssignments[tId] };
+                            let changed = false;
+                            if (truck.driver === personId) { truck.driver = null; changed = true; }
+                            if (truck.helper1 === personId) { truck.helper1 = null; changed = true; }
+                            if (truck.helper2 === personId) { truck.helper2 = null; changed = true; }
+                            if (changed) newAssignments[tId] = truck;
+                        });
+                    }
 
-                if (!newAssignments[truckId]) {
-                    newAssignments[truckId] = { driver: null, helper1: null, helper2: null, observation: "" };
-                }
-                newAssignments[truckId][slotType] = personId;
+                    // Asignación nueva
+                    const targetTruck = { ...(newAssignments[truckId] || { driver: null, helper1: null, helper2: null, observation: "" }) };
+                    targetTruck[slotType] = personId;
+                    newAssignments[truckId] = targetTruck;
+                    
+                    return newAssignments;
+                });
                 
-                setAssignments(newAssignments);
                 setShowStaffModal(false);
                 setSelectedSlot(null);
             };
@@ -447,41 +572,43 @@
             };
 
             const updateObservation = (truckId, text) => {
-                const newAssignments = { ...assignments };
-                if (!newAssignments[truckId]) {
-                    newAssignments[truckId] = { driver: null, helper1: null, helper2: null, observation: "" };
-                }
-                newAssignments[truckId].observation = text;
-                setAssignments(newAssignments);
+                setAssignments(prev => {
+                    const newAssignments = { ...prev };
+                    const targetTruck = { ...(newAssignments[truckId] || { driver: null, helper1: null, helper2: null, observation: "" }) };
+                    targetTruck.observation = text;
+                    newAssignments[truckId] = targetTruck;
+                    return newAssignments;
+                });
             };
 
             const handleAddStaff = () => {
                 if (!newStaffData.name.trim()) return;
                 const newId = staff.length > 0 ? Math.max(...staff.map(s => s.id)) + 1 : 1;
                 const newPerson = { ...newStaffData, id: newId, isFletero: false };
-                setStaff([...staff, newPerson]);
+                setStaff(prev => [...prev, newPerson]);
                 setNewStaffData({ name: '', role: 'Ayudante', isDriver: false }); 
             };
             
             const handleDeleteStaff = (id) => {
                 if (window.confirm('¿Seguro que deseas eliminar a esta persona del sistema?')) {
-                    // Remover de asignaciones actuales
-                    const newAssignments = { ...assignments };
-                    Object.keys(newAssignments).forEach(tId => {
-                        if (newAssignments[tId]?.driver === id) newAssignments[tId].driver = null;
-                        if (newAssignments[tId]?.helper1 === id) newAssignments[tId].helper1 = null;
-                        if (newAssignments[tId]?.helper2 === id) newAssignments[tId].helper2 = null;
+                    // Limpiar asignaciones primero
+                    setAssignments(prev => {
+                        const newAssignments = { ...prev };
+                        Object.keys(newAssignments).forEach(tId => {
+                            const truck = { ...newAssignments[tId] };
+                            if (truck.driver === id) truck.driver = null;
+                            if (truck.helper1 === id) truck.helper1 = null;
+                            if (truck.helper2 === id) truck.helper2 = null;
+                            newAssignments[tId] = truck;
+                        });
+                        return newAssignments;
                     });
-                    setAssignments(newAssignments);
                     
-                    // Remover de ausentes
                     setAbsentStaffIds(prev => {
                         const newSet = new Set(prev);
                         newSet.delete(id);
                         return newSet;
                     });
-
-                    // Remover de la lista
                     setStaff(prev => prev.filter(s => s.id !== id));
                 }
             };
@@ -492,13 +619,19 @@
 
             const markAsAbsent = (id) => {
                 if (!id) return;
-                const newAssignments = { ...assignments };
-                Object.keys(newAssignments).forEach(tId => {
-                    if (newAssignments[tId]?.driver === id) newAssignments[tId].driver = null;
-                    if (newAssignments[tId]?.helper1 === id) newAssignments[tId].helper1 = null;
-                    if (newAssignments[tId]?.helper2 === id) newAssignments[tId].helper2 = null;
+                
+                setAssignments(prev => {
+                    const newAssignments = { ...prev };
+                    Object.keys(newAssignments).forEach(tId => {
+                        const truck = { ...newAssignments[tId] };
+                        if (truck.driver === id) truck.driver = null;
+                        if (truck.helper1 === id) truck.helper1 = null;
+                        if (truck.helper2 === id) truck.helper2 = null;
+                        newAssignments[tId] = truck;
+                    });
+                    return newAssignments;
                 });
-                setAssignments(newAssignments);
+
                 setAbsentStaffIds(prev => new Set(prev).add(id));
             };
 
@@ -514,11 +647,17 @@
                 if(!selectedSlot) return;
                 const { truckId, slotType } = selectedSlot;
                 const currentPersonId = assignments[truckId]?.[slotType];
-                
-                if (currentPersonId) {
-                    markAsAbsent(currentPersonId);
-                }
+                if (currentPersonId) markAsAbsent(currentPersonId);
                 setShowStaffModal(false);
+            };
+
+            const handleResetDay = () => {
+                if (window.confirm("¿Estás seguro de que quieres REINICIAR todo el día?")) {
+                    setAssignments(createEmptyAssignments());
+                    setTruckStatus({});
+                    setAbsentStaffIds(new Set());
+                    setShowSettingsModal(false);
+                }
             };
 
             const exportPDF = () => {
@@ -550,7 +689,6 @@
                     });
                 };
 
-                // PAGINA 1: CAMIONES EN RUTA
                 const departedTrucks = INITIAL_TRUCKS.filter(id => truckStatus[id] === 'departed');
                 doc.setFontSize(14);
                 doc.setTextColor(0, 100, 0); 
@@ -572,11 +710,9 @@
                     doc.text("Ningún camión marcado 'En Ruta'.", margin, currentY + 5);
                 }
 
-                // NUEVA PAGINA PARA PENDIENTES
                 doc.addPage();
                 currentY = margin;
 
-                // PAGINA 2: CAMIONES PENDIENTES
                 const pendingTrucks = INITIAL_TRUCKS.filter(id => truckStatus[id] !== 'departed');
                 doc.setFontSize(14);
                 doc.setTextColor(150, 0, 0); 
@@ -598,8 +734,6 @@
                     doc.text("Todos los camiones están en ruta.", margin, currentY + 5);
                 }
 
-                // NUEVA PAGINA PARA AUSENTES (si hay espacio se puede dejar abajo, pero pediste "mas abajo", mejor otra hoja o bien separado)
-                // Vamos a usar otra hoja para que sea limpio
                 doc.addPage();
                 currentY = margin;
 
@@ -633,7 +767,7 @@
                     </div>
                     <h1 className="text-4xl font-bold tracking-widest mb-2">LOGISTICA</h1>
                     <p className="text-slate-400 text-sm">Sistema de Control de Personal</p>
-                    <p className="absolute bottom-10 text-xs text-slate-600">Versión 2.2.0 - Rodrigo Cabrera</p>
+                    <p className="absolute bottom-10 text-xs text-slate-600">Versión 2.7.0 - Rodrigo Cabrera</p>
                 </div>
                 );
             }
@@ -643,18 +777,22 @@
                 
                 <header className={`sticky top-0 z-40 backdrop-blur-md shadow-sm px-4 py-3 flex justify-between items-center ${darkMode ? 'bg-slate-900/90 border-b border-slate-800' : 'bg-white/90 border-b border-slate-200'}`}>
                     <div className="flex items-center gap-2">
-                    <div className="bg-blue-600 p-2 rounded-lg shadow-lg shadow-blue-600/20">
-                        <Truck size={20} className="text-white" />
-                    </div>
-                    <div>
-                        <h1 className="font-bold leading-tight text-xl">LOGÍSTICA</h1>
-                        <input 
-                        type="date" 
-                        value={date} 
-                        onChange={(e) => setDate(e.target.value)}
-                        className="text-sm bg-transparent outline-none text-slate-500 font-medium cursor-pointer hover:text-blue-500 transition-colors"
-                        />
-                    </div>
+                        <div className="bg-blue-600 p-2 rounded-lg shadow-lg shadow-blue-600/20">
+                            <Truck size={20} className="text-white" />
+                        </div>
+                        <div>
+                            <h1 className="font-bold leading-tight text-xl flex items-center gap-2">
+                                LOGÍSTICA
+                                {saveStatus === 'saving' && <Loader2 size={16} className="text-slate-400 animate-spin" />}
+                                {saveStatus === 'saved' && <Check size={16} className="text-green-500 animate-in fade-in" />}
+                            </h1>
+                            <input 
+                            type="date" 
+                            value={date} 
+                            onChange={(e) => setDate(e.target.value)}
+                            className="text-sm bg-transparent outline-none text-slate-500 font-medium cursor-pointer hover:text-blue-500 transition-colors"
+                            />
+                        </div>
                     </div>
                     <div className="flex gap-2 items-center">
                         <button 
@@ -763,86 +901,6 @@
                     </main>
                 )}
 
-                {currentView === 'report' && (
-                    <main className="p-4 max-w-4xl mx-auto pb-24">
-                    <div className={`p-6 rounded-2xl shadow-xl mb-6 ${darkMode ? 'bg-slate-800' : 'bg-white'}`}>
-                        <h2 className="text-3xl font-bold mb-6 flex items-center gap-3">
-                            <div className="bg-blue-100 p-2 rounded-lg"><FileSpreadsheet className="text-blue-600" size={28}/></div>
-                            Resumen Diario
-                        </h2>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-                            <div className={`p-5 rounded-2xl border-2 flex flex-col items-center justify-center gap-2 ${darkMode ? 'bg-green-900/20 border-green-800' : 'bg-green-50 border-green-100'}`}>
-                                <div className="bg-green-100 p-3 rounded-full"><Truck className="text-green-600" size={24}/></div>
-                                <div className="text-4xl font-black text-green-600">
-                                    {Object.values(truckStatus).filter(s => s === 'departed').length}
-                                </div>
-                                <div className="font-bold text-green-700">Camiones en Ruta</div>
-                            </div>
-                            <div className={`p-5 rounded-2xl border-2 flex flex-col items-center justify-center gap-2 ${darkMode ? 'bg-slate-700 border-slate-600' : 'bg-slate-50 border-slate-100'}`}>
-                                <div className="bg-slate-200 p-3 rounded-full dark:bg-slate-600"><Users className="text-slate-600 dark:text-slate-300" size={24}/></div>
-                                <div className="text-4xl font-black text-slate-600 dark:text-slate-300">
-                                    {getAvailableStaff().length}
-                                </div>
-                                <div className="font-bold text-slate-600 dark:text-slate-400">Personal Disponible</div>
-                            </div>
-                            <div className={`p-5 rounded-2xl border-2 flex flex-col items-center justify-center gap-2 ${darkMode ? 'bg-red-900/20 border-red-800' : 'bg-red-50 border-red-100'}`}>
-                                <div className="bg-red-100 p-3 rounded-full"><UserX className="text-red-600" size={24}/></div>
-                                <div className="text-4xl font-black text-red-600">
-                                    {getAbsentStaff().length}
-                                </div>
-                                <div className="font-bold text-red-700">Personal Ausente</div>
-                            </div>
-                        </div>
-
-                        <div className="grid md:grid-cols-2 gap-8">
-                            <div>
-                                <h3 className="font-bold text-xl mb-4 flex items-center gap-2 text-slate-700 dark:text-slate-300"><Users size={20}/> Disponibles para Asignar</h3>
-                                <ul className={`space-y-2 max-h-[300px] overflow-y-auto p-2 rounded-xl border ${darkMode ? 'border-slate-700 bg-slate-900/30' : 'border-slate-100 bg-slate-50'}`}>
-                                    {getAvailableStaff().map(p => (
-                                        <li key={p.id} className="flex items-center justify-between p-2 rounded bg-white dark:bg-slate-700 shadow-sm border border-slate-100 dark:border-slate-600">
-                                            <div className="flex items-center gap-3">
-                                                <div className={`w-3 h-3 rounded-full ${p.isDriver ? 'bg-red-500 shadow-sm shadow-red-500/50' : 'bg-slate-300'}`}></div>
-                                                <div>
-                                                    <span className={`font-bold block ${p.isDriver ? 'text-red-600 dark:text-red-400' : ''}`}>{p.name}</span>
-                                                    <span className="text-xs opacity-60">({p.role})</span>
-                                                </div>
-                                            </div>
-                                            <button onClick={() => markAsAbsent(p.id)} className="p-1 text-slate-300 hover:text-red-500 transition-colors" title="Marcar como Ausente"><UserX size={16}/></button>
-                                        </li>
-                                    ))}
-                                </ul>
-                            </div>
-
-                            <div>
-                                <h3 className="font-bold text-xl mb-4 flex items-center gap-2 text-red-600 dark:text-red-400"><UserX size={20}/> Ausentes Hoy</h3>
-                                <ul className={`space-y-2 max-h-[300px] overflow-y-auto p-2 rounded-xl border ${darkMode ? 'border-red-900/30 bg-red-900/10' : 'border-red-100 bg-red-50'}`}>
-                                    {getAbsentStaff().map(p => (
-                                        <li key={p.id} className="flex items-center justify-between p-2 rounded bg-white dark:bg-slate-700 shadow-sm border border-red-100 dark:border-red-900/30">
-                                            <div className="flex items-center gap-3 opacity-60">
-                                                <UserX size={16} className="text-red-400"/>
-                                                <span className="font-bold strike-through decoration-red-500">{p.name}</span>
-                                            </div>
-                                            <button onClick={() => markAsPresent(p.id)} className="p-1 text-red-300 hover:text-green-500 transition-colors font-bold text-xs" title="Marcar como Presente">VOLVER A DISPONIBLE</button>
-                                        </li>
-                                    ))}
-                                </ul>
-                            </div>
-                        </div>
-                        
-                        <div className="mt-8 pt-6 border-t dark:border-slate-700">
-                            <button 
-                                onClick={exportPDF}
-                                className="w-full py-4 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-black text-lg shadow-xl shadow-red-600/20 flex items-center justify-center gap-3 transition-all transform hover:scale-[1.01] active:scale-95"
-                            >
-                                <FileText size={28}/>
-                                Descargar Reporte Diario en PDF
-                            </button>
-                        </div>
-                    </div>
-                    </main>
-                )}
-
                 <StaffSelectorModal 
                     isOpen={showStaffModal} 
                     onClose={() => setShowStaffModal(false)}
@@ -870,6 +928,7 @@
                     darkMode={darkMode}
                     toggleTheme={() => setDarkMode(!darkMode)}
                     onOpenManageStaff={() => setShowManageStaffModal(true)}
+                    onResetDay={handleResetDay}
                 />
 
                 <div className="fixed bottom-6 right-6 lg:hidden z-50">
