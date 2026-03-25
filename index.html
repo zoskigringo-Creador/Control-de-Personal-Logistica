@@ -5,18 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>LOGÍSTICA - Control de Personal</title>
     
-    <!-- Meta tags para modo Pantalla Completa (Mobile Web App) -->
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#2563eb">
     
-    <!-- Librerías Externas (React, Tailwind, PDF) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.29/jspdf.plugin.autotable.min.js"></script>
     
-    <!-- Import Map para manejar React y Lucide sin instalación -->
     <script type="importmap">
     {
       "imports": {
@@ -27,10 +24,8 @@
     }
     </script>
     
-    <!-- Babel para traducir JSX en el navegador -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    <!-- Manifiesto PWA embebido para Android -->
     <link rel="manifest" id="my-manifest">
     <script>
         const manifest = {
@@ -65,11 +60,17 @@
         .animate-in { animation: slideIn 0.3s ease-out; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes slideIn { from { transform: translateY(-10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        
         /* Scrollbar oculto para móviles */
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        /* Evitar selección de texto accidental en app mode */
-        body { -webkit-tap-highlight-color: transparent; }
+        
+        /* BLOQUEO CRÍTICO DE PULL-TO-REFRESH PARA IPHONE Y ANDROID */
+        html, body { 
+            overscroll-behavior-y: none !important; 
+            overscroll-behavior: none !important;
+            -webkit-tap-highlight-color: transparent; 
+        }
     </style>
 </head>
 <body class="bg-slate-100 overscroll-none">
@@ -85,17 +86,16 @@
             Cloud, Check, Loader2, ClipboardCheck, Lock, Eye
         } from 'lucide-react';
 
-        // --- IMPORTACIONES DE FIREBASE (Para el "Efecto Espejo") ---
+        // --- IMPORTACIONES DE FIREBASE ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- CONFIGURACIÓN DE FIREBASE ---
+        // --- CONFIGURACIÓN DE FIREBASE ACTUALIZADA ---
         let firebaseConfig;
         if (typeof __firebase_config !== 'undefined') {
-            firebaseConfig = JSON.parse(__firebase_config); // Entorno de prueba de la IA
+            firebaseConfig = JSON.parse(__firebase_config);
         } else {
-            // TUS DATOS DE FIREBASE AÑADIDOS CORRECTAMENTE AQUÍ
             firebaseConfig = {
                 apiKey: "AIzaSyAVm6bz2J4yGaD4wcoJ56zO22KR9NnskOE",
                 authDomain: "logistica---control-y-espejo.firebaseapp.com",
@@ -183,7 +183,7 @@
 
         // --- COMPONENTES MODALES ---
         const StaffSelectorModal = ({ isOpen, onClose, availableStaff, onAssign, onMarkAbsent, darkMode, isAdmin }) => {
-            if (!isOpen || !isAdmin) return null; // Solo admin puede ver esto
+            if (!isOpen || !isAdmin) return null;
 
             return (
                 <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm`}>
@@ -404,16 +404,16 @@
             
             // Estados de Autenticación y Sincronización
             const [firebaseUser, setFirebaseUser] = useState(null);
-            const [authStep, setAuthStep] = useState('login'); // login, app
-            const [loginData, setLoginData] = useState({ username: 'Gustavo', password: '' });
-            const [userRole, setUserRole] = useState(null); // 'admin' (Gustavo) o 'viewer' (Emiliano, Rodrigo)
+            const [authStep, setAuthStep] = useState('login'); 
+            const [loginData, setLoginData] = useState({ username: 'Gustavo' }); // Contraseña eliminada
+            const [userRole, setUserRole] = useState(null); 
             const [saveStatus, setSaveStatus] = useState('saved'); 
             const [isDataLoaded, setIsDataLoaded] = useState(false);
             
             // Estado de Negocio
             const [assignments, setAssignments] = useState(INITIAL_ASSIGNMENTS);
             const [truckStatus, setTruckStatus] = useState({}); 
-            const [staff, setStaff] = useState(INITIAL_STAFF_DATA); // Carga a todos por defecto
+            const [staff, setStaff] = useState(INITIAL_STAFF_DATA); 
             const [absentStaffIds, setAbsentStaffIds] = useState(new Set());
 
             const [selectedSlot, setSelectedSlot] = useState(null); 
@@ -424,8 +424,16 @@
             const [newStaffData, setNewStaffData] = useState({ name: '', role: 'Ayudante', isDriver: false });
             const pdfLibraryLoaded = useRef(false);
 
-            // 1. Inicialización y Autenticación Firebase
+            // 1. ADVERTENCIA AL RECARGAR Y CARGA DE FIREBASE
             useEffect(() => {
+                // Prevenir cierre accidental de pestaña
+                const handleBeforeUnload = (e) => {
+                    e.preventDefault();
+                    e.returnValue = '¿Estás seguro de que deseas salir? Es posible que los cambios recientes no se hayan guardado.';
+                    return e.returnValue;
+                };
+                window.addEventListener('beforeunload', handleBeforeUnload);
+
                 const initAuth = async () => {
                     try {
                         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -446,7 +454,10 @@
                 if (window.jspdf) pdfLibraryLoaded.current = true;
                 setTimeout(() => setShowSplash(false), 2000);
 
-                return () => unsubscribe();
+                return () => {
+                    unsubscribe();
+                    window.removeEventListener('beforeunload', handleBeforeUnload);
+                };
             }, []);
 
             // 2. Sincronización en Tiempo Real (Efecto Espejo)
@@ -508,19 +519,15 @@
             }, [assignments, truckStatus, absentStaffIds, isDataLoaded, userRole, firebaseUser, date, authStep]);
 
 
-            // --- FUNCIONES DE LOGIN ---
+            // --- FUNCIONES DE LOGIN (Sin contraseña) ---
             const handleLogin = (e) => {
                 e.preventDefault();
-                if (loginData.password === 'cominco1234') {
-                    if (loginData.username === 'Gustavo') {
-                        setUserRole('admin');
-                    } else {
-                        setUserRole('viewer'); // Rodrigo o Emiliano
-                    }
-                    setAuthStep('app');
+                if (loginData.username === 'Gustavo') {
+                    setUserRole('admin');
                 } else {
-                    alert("Contraseña incorrecta");
+                    setUserRole('viewer'); // Rodrigo o Emiliano
                 }
+                setAuthStep('app');
             };
 
 
@@ -751,28 +758,18 @@
                             <h2 className="text-2xl font-bold text-center mb-6">Acceso Logística</h2>
                             <form onSubmit={handleLogin} className="space-y-4">
                                 <div>
-                                    <label className="block text-sm font-bold text-slate-500 mb-1">Usuario</label>
+                                    <label className="block text-sm font-bold text-slate-500 mb-1">Seleccionar Usuario</label>
                                     <select 
                                         value={loginData.username}
                                         onChange={(e) => setLoginData({...loginData, username: e.target.value})}
-                                        className="w-full p-3 rounded-lg border bg-slate-50 border-slate-200 outline-none focus:border-blue-500"
+                                        className="w-full p-3 rounded-lg border bg-slate-50 border-slate-200 outline-none focus:border-blue-500 font-medium"
                                     >
                                         <option value="Gustavo">Gustavo Recalde (Admin)</option>
                                         <option value="Rodrigo">Rodrigo (Espejo)</option>
                                         <option value="Emiliano">Emiliano (Espejo)</option>
                                     </select>
                                 </div>
-                                <div>
-                                    <label className="block text-sm font-bold text-slate-500 mb-1">Contraseña</label>
-                                    <input 
-                                        type="password" 
-                                        value={loginData.password}
-                                        onChange={(e) => setLoginData({...loginData, password: e.target.value})}
-                                        className="w-full p-3 rounded-lg border bg-slate-50 border-slate-200 outline-none focus:border-blue-500"
-                                        placeholder="Ingrese contraseña"
-                                    />
-                                </div>
-                                <button type="submit" className="w-full py-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition-colors mt-4">
+                                <button type="submit" className="w-full py-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition-colors mt-4 shadow-lg shadow-blue-600/30">
                                     Ingresar al Sistema
                                 </button>
                             </form>
