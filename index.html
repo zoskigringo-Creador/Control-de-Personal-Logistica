@@ -192,15 +192,63 @@
         const INITIAL_ASSIGNMENTS = createEmptyAssignments();
 
         // --- COMPONENTES MODALES ---
-        const StaffSelectorModal = ({ isOpen, onClose, availableStaff, onAssign, onMarkAbsent, darkMode, isAdmin }) => {
+        const StaffSelectorModal = ({ isOpen, onClose, staffList, assignments, onAssign, onMarkAbsent, darkMode, isAdmin }) => {
+            const [searchTerm, setSearchTerm] = useState('');
+
+            // Limpiar buscador al abrir el modal
+            useEffect(() => {
+                if (isOpen) setSearchTerm('');
+            }, [isOpen]);
+
             if (!isOpen || !isAdmin) return null;
+
+            // Calcular en qué camión está asignada cada persona actualmente
+            const staffWithStatus = staffList.map(person => {
+                let assignedTruck = null;
+                Object.entries(assignments).forEach(([tId, truck]) => {
+                    if (truck && (truck.driver === person.id || truck.helper1 === person.id || truck.helper2 === person.id)) {
+                        assignedTruck = tId;
+                    }
+                });
+                return { ...person, assignedTruck };
+            });
+
+            // Filtrar por la búsqueda
+            const filteredStaff = staffWithStatus.filter(p => 
+                p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                p.role.toLowerCase().includes(searchTerm.toLowerCase())
+            );
+
+            const handlePersonClick = (person) => {
+                if (person.assignedTruck) {
+                    if(window.confirm(`${person.name} ya está asignado/a en el móvil ${person.assignedTruck}.\n\n¿Deseas FORZAR el cambio y mover a esta persona aquí?`)) {
+                        onAssign(person.id);
+                    }
+                } else {
+                    onAssign(person.id);
+                }
+            };
 
             return (
                 <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm`}>
                     <div className={`${darkMode ? 'bg-slate-800 text-white' : 'bg-white text-slate-900'} w-full max-w-md rounded-2xl shadow-2xl flex flex-col max-h-[85vh]`}>
                         <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex justify-between items-center">
                             <h3 className="font-bold text-lg">Seleccionar Personal</h3>
-                            <button onClick={onClose}><X size={24} /></button>
+                            <button onClick={onClose} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition-colors"><X size={24} /></button>
+                        </div>
+
+                        {/* Buscador */}
+                        <div className="p-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/50">
+                            <div className="relative">
+                                <Search className="absolute left-3 top-3 text-slate-400" size={18} />
+                                <input 
+                                    type="text" 
+                                    placeholder="Buscar por nombre o rol..." 
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 outline-none focus:border-blue-500 shadow-sm"
+                                />
+                            </div>
                         </div>
                         
                         <div className="p-2 grid grid-cols-2 gap-2 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50">
@@ -219,29 +267,42 @@
                         </div>
 
                         <div className="overflow-y-auto p-2 flex-1">
-                        <h4 className="text-xs font-bold text-slate-400 uppercase mb-2 px-1">Personal Disponible</h4>
-                        {availableStaff.map(person => (
-                            <button
-                            key={person.id}
-                            onClick={() => onAssign(person.id)}
-                            className={`w-full text-left p-3 rounded-lg mb-2 flex items-center justify-between group transition-all
-                                ${person.isDriver ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200' : 'bg-slate-50 dark:bg-slate-700/50 border border-slate-100'}
-                                hover:scale-[1.02] active:scale-95
-                            `}
-                            >
-                            <div>
-                                <div className="font-semibold">{person.name}</div>
-                                <div className="text-xs text-slate-500">{person.role}</div>
-                            </div>
-                            <div className="flex gap-1">
-                                {person.isDriver && <span className="text-xs font-bold text-red-500 bg-red-100 px-2 py-1 rounded">CHOFER</span>}
-                                {person.isFletero && <span className="text-xs font-bold text-orange-600 bg-orange-100 px-2 py-1 rounded">FLETERO</span>}
-                            </div>
-                            </button>
-                        ))}
-                        {availableStaff.length === 0 && (
-                            <p className="text-center text-slate-400 py-4 text-sm">No hay personal disponible</p>
-                        )}
+                            <h4 className="text-xs font-bold text-slate-400 uppercase mb-2 px-1">
+                                {searchTerm ? 'Resultados de Búsqueda' : 'Lista de Personal'}
+                            </h4>
+                            {filteredStaff.map(person => (
+                                <button
+                                    key={person.id}
+                                    onClick={() => handlePersonClick(person)}
+                                    className={`w-full text-left p-3 rounded-lg mb-2 flex items-center justify-between group transition-all
+                                        ${person.isDriver ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200' : 'bg-slate-50 dark:bg-slate-700/50 border border-slate-100'}
+                                        ${person.assignedTruck ? 'opacity-70 border-dashed border-2' : ''}
+                                        hover:scale-[1.02] active:scale-95
+                                    `}
+                                >
+                                    <div>
+                                        <div className="font-semibold">{person.name}</div>
+                                        <div className="text-xs text-slate-500 flex gap-2 items-center">
+                                            <span>{person.role}</span>
+                                            {person.assignedTruck && (
+                                                <span className="text-[10px] font-bold bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded border border-yellow-200">
+                                                    En {person.assignedTruck}
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-1 flex-col items-end">
+                                        {person.isDriver && <span className="text-[10px] font-bold text-red-500 bg-red-100 px-1.5 py-0.5 rounded">CHOFER</span>}
+                                        {person.isFletero && <span className="text-[10px] font-bold text-orange-600 bg-orange-100 px-1.5 py-0.5 rounded">FLETERO</span>}
+                                    </div>
+                                </button>
+                            ))}
+                            {filteredStaff.length === 0 && (
+                                <p className="text-center text-slate-400 py-6 text-sm flex flex-col items-center gap-2">
+                                    <Search size={32} className="opacity-20" />
+                                    No se encontró nadie con ese nombre
+                                </p>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -437,7 +498,6 @@
             useEffect(() => {
                 // Prevenir cierre accidental de pestaña o pull-to-refresh severo
                 const handleBeforeUnload = (e) => {
-                    // Solo advertimos si ya pasamos el login para no molestar al inicio
                     if (authStep === 'app') {
                         e.preventDefault();
                         e.returnValue = '¿Seguro que deseas recargar o salir?';
@@ -449,7 +509,12 @@
                 const initAuth = async () => {
                     try {
                         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await signInWithCustomToken(auth, __initial_auth_token);
+                            try {
+                                await signInWithCustomToken(auth, __initial_auth_token);
+                            } catch (customTokenError) {
+                                console.warn("Custom token failed, falling back to anonymous auth");
+                                await signInAnonymously(auth);
+                            }
                         } else {
                             await signInAnonymously(auth);
                         }
@@ -486,7 +551,7 @@
                         setTruckStatus(data.truckStatus || {});
                         setAbsentStaffIds(new Set(data.absentStaffIds || []));
                     } else {
-                        // Si no hay datos, inicializamos vacío
+                        // Si no hay datos en la nube para este día, inicializamos vacío
                         setAssignments(createEmptyAssignments());
                         setTruckStatus({});
                         setAbsentStaffIds(new Set());
@@ -500,7 +565,6 @@
                     if (docSnap.exists()) {
                         setStaff(docSnap.data().staffList || INITIAL_STAFF_DATA);
                     } else if (userRole === 'admin') {
-                        // Guardar datos base completos la primera vez si no existen
                         setDoc(staffRef, { staffList: INITIAL_STAFF_DATA });
                     }
                 });
@@ -534,7 +598,13 @@
             // --- Lógica de Negocio ---
             const getStaffById = (id) => staff.find(s => s.id === id);
 
-            const getAvailableStaff = () => {
+            // Calcula quiénes NO están ausentes (Para mostrar en las listas y modal de selección)
+            const getNonAbsentStaff = () => {
+                return staff.filter(s => !absentStaffIds.has(s.id));
+            };
+
+            // Calcula quiénes están completamente libres y no asignados a nada (Para la caja de estadísticas)
+            const getCompletelyFreeStaff = () => {
                 const assignedIds = new Set();
                 Object.values(assignments).forEach(truck => {
                     if (!truck) return;
@@ -554,6 +624,8 @@
 
                 setAssignments(prev => {
                     const newAssignments = { ...prev };
+                    
+                    // Si seleccionó a alguien, primero lo borramos de cualquier otro lugar donde estuviera
                     if (personId) {
                         Object.keys(newAssignments).forEach(tId => {
                             const truck = { ...newAssignments[tId] };
@@ -564,6 +636,8 @@
                             if (changed) newAssignments[tId] = truck;
                         });
                     }
+
+                    // Ahora lo asignamos al nuevo slot
                     const targetTruck = { ...(newAssignments[truckId] || { driver: null, helper1: null, helper2: null, observation: "" }) };
                     targetTruck[slotType] = personId;
                     newAssignments[truckId] = targetTruck;
@@ -596,6 +670,15 @@
                     return newAssignments;
                 });
                 setAbsentStaffIds(prev => new Set(prev).add(id));
+            };
+
+            const markAsPresent = (id) => {
+                if (userRole !== 'admin' || !id) return;
+                setAbsentStaffIds(prev => {
+                    const newSet = new Set(prev);
+                    newSet.delete(id);
+                    return newSet;
+                });
             };
 
             const handleMarkCurrentSlotAbsent = () => {
@@ -909,6 +992,71 @@
                             <div className="bg-blue-100 p-2 rounded-lg"><FileSpreadsheet className="text-blue-600" size={28}/></div>
                             Resumen Diario
                         </h2>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                            <div className={`p-5 rounded-2xl border-2 flex flex-col items-center justify-center gap-2 ${darkMode ? 'bg-green-900/20 border-green-800' : 'bg-green-50 border-green-100'}`}>
+                                <div className="bg-green-100 p-3 rounded-full"><Truck className="text-green-600" size={24}/></div>
+                                <div className="text-4xl font-black text-green-600">
+                                    {Object.values(truckStatus).filter(s => s === 'departed').length}
+                                </div>
+                                <div className="font-bold text-green-700">Camiones en Ruta</div>
+                            </div>
+                            <div className={`p-5 rounded-2xl border-2 flex flex-col items-center justify-center gap-2 ${darkMode ? 'bg-slate-700 border-slate-600' : 'bg-slate-50 border-slate-100'}`}>
+                                <div className="bg-slate-200 p-3 rounded-full dark:bg-slate-600"><Users className="text-slate-600 dark:text-slate-300" size={24}/></div>
+                                <div className="text-4xl font-black text-slate-600 dark:text-slate-300">
+                                    {getCompletelyFreeStaff().length}
+                                </div>
+                                <div className="font-bold text-slate-600 dark:text-slate-400">Personal Disponible</div>
+                            </div>
+                            <div className={`p-5 rounded-2xl border-2 flex flex-col items-center justify-center gap-2 ${darkMode ? 'bg-red-900/20 border-red-800' : 'bg-red-50 border-red-100'}`}>
+                                <div className="bg-red-100 p-3 rounded-full"><UserX className="text-red-600" size={24}/></div>
+                                <div className="text-4xl font-black text-red-600">
+                                    {getAbsentStaff().length}
+                                </div>
+                                <div className="font-bold text-red-700">Personal Ausente</div>
+                            </div>
+                        </div>
+
+                        <div className="grid md:grid-cols-2 gap-8">
+                            <div>
+                                <h3 className="font-bold text-xl mb-4 flex items-center gap-2 text-slate-700 dark:text-slate-300"><Users size={20}/> Disponibles para Asignar</h3>
+                                <ul className={`space-y-2 max-h-[300px] overflow-y-auto p-2 rounded-xl border ${darkMode ? 'border-slate-700 bg-slate-900/30' : 'border-slate-100 bg-slate-50'}`}>
+                                    {getCompletelyFreeStaff().map(p => (
+                                        <li key={p.id} className="flex items-center justify-between p-2 rounded bg-white dark:bg-slate-700 shadow-sm border border-slate-100 dark:border-slate-600">
+                                            <div className="flex items-center gap-3">
+                                                <div className={`w-3 h-3 rounded-full ${p.isDriver ? 'bg-red-500 shadow-sm shadow-red-500/50' : 'bg-slate-300'}`}></div>
+                                                <div>
+                                                    <span className={`font-bold block ${p.isDriver ? 'text-red-600 dark:text-red-400' : ''}`}>{p.name}</span>
+                                                    <span className="text-xs opacity-60">({p.role})</span>
+                                                </div>
+                                            </div>
+                                            {userRole === 'admin' && (
+                                                <button onClick={() => markAsAbsent(p.id)} className="p-1 text-slate-300 hover:text-red-500 transition-colors" title="Marcar como Ausente"><UserX size={16}/></button>
+                                            )}
+                                        </li>
+                                    ))}
+                                    {getCompletelyFreeStaff().length === 0 && <p className="text-sm text-slate-400 p-2 text-center">Nadie disponible</p>}
+                                </ul>
+                            </div>
+
+                            <div>
+                                <h3 className="font-bold text-xl mb-4 flex items-center gap-2 text-red-600 dark:text-red-400"><UserX size={20}/> Ausentes Hoy</h3>
+                                <ul className={`space-y-2 max-h-[300px] overflow-y-auto p-2 rounded-xl border ${darkMode ? 'border-red-900/30 bg-red-900/10' : 'border-red-100 bg-red-50'}`}>
+                                    {getAbsentStaff().map(p => (
+                                        <li key={p.id} className="flex items-center justify-between p-2 rounded bg-white dark:bg-slate-700 shadow-sm border border-red-100 dark:border-red-900/30">
+                                            <div className="flex items-center gap-3 opacity-60">
+                                                <UserX size={16} className="text-red-400"/>
+                                                <span className="font-bold line-through decoration-red-500">{p.name}</span>
+                                            </div>
+                                            {userRole === 'admin' && (
+                                                <button onClick={() => markAsPresent(p.id)} className="p-1 text-red-300 hover:text-green-500 transition-colors font-bold text-xs" title="Marcar como Presente">VOLVER</button>
+                                            )}
+                                        </li>
+                                    ))}
+                                    {getAbsentStaff().length === 0 && <p className="text-sm text-slate-400 p-2 text-center">Nadie marcado como ausente</p>}
+                                </ul>
+                            </div>
+                        </div>
                         
                         <div className="mt-8 pt-6 border-t dark:border-slate-700">
                             <button 
@@ -926,7 +1074,8 @@
                 <StaffSelectorModal 
                     isOpen={showStaffModal} 
                     onClose={() => setShowStaffModal(false)}
-                    availableStaff={getAvailableStaff()}
+                    staffList={getNonAbsentStaff()}
+                    assignments={assignments}
                     onAssign={handleAssign}
                     onMarkAbsent={handleMarkCurrentSlotAbsent}
                     darkMode={darkMode}
