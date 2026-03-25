@@ -5,15 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>LOGÍSTICA - Control de Personal</title>
     
+    <!-- Meta tags para modo Pantalla Completa y evitar comportamientos raros en móviles -->
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#2563eb">
     
+    <!-- Librerías Externas -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.29/jspdf.plugin.autotable.min.js"></script>
     
+    <!-- Import Map -->
     <script type="importmap">
     {
       "imports": {
@@ -24,8 +27,10 @@
     }
     </script>
     
+    <!-- Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
+    <!-- Manifiesto PWA embebido para Android/iOS -->
     <link rel="manifest" id="my-manifest">
     <script>
         const manifest = {
@@ -61,15 +66,19 @@
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes slideIn { from { transform: translateY(-10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
         
-        /* Scrollbar oculto para móviles */
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
         
-        /* BLOQUEO CRÍTICO DE PULL-TO-REFRESH PARA IPHONE Y ANDROID */
+        /* BLOQUEO CRÍTICO DE PULL-TO-REFRESH PARA IPHONE Y SAMSUNG */
         html, body { 
             overscroll-behavior-y: none !important; 
             overscroll-behavior: none !important;
+            -webkit-overflow-scrolling: touch;
             -webkit-tap-highlight-color: transparent; 
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
         }
     </style>
 </head>
@@ -83,7 +92,7 @@
             Truck, Users, Moon, Sun, FileSpreadsheet, FileText, CheckCircle2, 
             AlertCircle, UserMinus, UserX, UserPlus, Settings, X, Search, 
             Plus, ToggleLeft, ToggleRight, Trash2, RotateCcw, 
-            Cloud, Check, Loader2, ClipboardCheck, Lock, Eye
+            Cloud, Check, Loader2, ClipboardCheck, Eye
         } from 'lucide-react';
 
         // --- IMPORTACIONES DE FIREBASE ---
@@ -91,11 +100,12 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- CONFIGURACIÓN DE FIREBASE ACTUALIZADA ---
+        // --- CONFIGURACIÓN DE FIREBASE ---
         let firebaseConfig;
         if (typeof __firebase_config !== 'undefined') {
             firebaseConfig = JSON.parse(__firebase_config);
         } else {
+            // TUS DATOS DE FIREBASE
             firebaseConfig = {
                 apiKey: "AIzaSyAVm6bz2J4yGaD4wcoJ56zO22KR9NnskOE",
                 authDomain: "logistica---control-y-espejo.firebaseapp.com",
@@ -402,10 +412,9 @@
             const [currentView, setCurrentView] = useState('dashboard');
             const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
             
-            // Estados de Autenticación y Sincronización
+            // Estados de Autenticación
             const [firebaseUser, setFirebaseUser] = useState(null);
             const [authStep, setAuthStep] = useState('login'); 
-            const [loginData, setLoginData] = useState({ username: 'Gustavo' }); // Contraseña eliminada
             const [userRole, setUserRole] = useState(null); 
             const [saveStatus, setSaveStatus] = useState('saved'); 
             const [isDataLoaded, setIsDataLoaded] = useState(false);
@@ -426,11 +435,14 @@
 
             // 1. ADVERTENCIA AL RECARGAR Y CARGA DE FIREBASE
             useEffect(() => {
-                // Prevenir cierre accidental de pestaña
+                // Prevenir cierre accidental de pestaña o pull-to-refresh severo
                 const handleBeforeUnload = (e) => {
-                    e.preventDefault();
-                    e.returnValue = '¿Estás seguro de que deseas salir? Es posible que los cambios recientes no se hayan guardado.';
-                    return e.returnValue;
+                    // Solo advertimos si ya pasamos el login para no molestar al inicio
+                    if (authStep === 'app') {
+                        e.preventDefault();
+                        e.returnValue = '¿Seguro que deseas recargar o salir?';
+                        return e.returnValue;
+                    }
                 };
                 window.addEventListener('beforeunload', handleBeforeUnload);
 
@@ -458,7 +470,7 @@
                     unsubscribe();
                     window.removeEventListener('beforeunload', handleBeforeUnload);
                 };
-            }, []);
+            }, [authStep]);
 
             // 2. Sincronización en Tiempo Real (Efecto Espejo)
             useEffect(() => {
@@ -517,18 +529,6 @@
                     .catch(() => setSaveStatus('error'));
 
             }, [assignments, truckStatus, absentStaffIds, isDataLoaded, userRole, firebaseUser, date, authStep]);
-
-
-            // --- FUNCIONES DE LOGIN (Sin contraseña) ---
-            const handleLogin = (e) => {
-                e.preventDefault();
-                if (loginData.username === 'Gustavo') {
-                    setUserRole('admin');
-                } else {
-                    setUserRole('viewer'); // Rodrigo o Emiliano
-                }
-                setAuthStep('app');
-            };
 
 
             // --- Lógica de Negocio ---
@@ -746,33 +746,44 @@
                 );
             }
 
+            // PANTALLA DE ACCESO SIN CONTRASEÑA, SOLO BOTONES
             if (authStep === 'login') {
                 return (
-                    <div className="flex flex-col items-center justify-center h-screen bg-slate-100 text-slate-800 p-4">
-                        <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-sm">
+                    <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-white p-4 animate-fade-in">
+                        <div className="bg-slate-800 p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-slate-700">
                             <div className="flex justify-center mb-6">
-                                <div className="bg-blue-100 p-4 rounded-full">
-                                    <Lock size={32} className="text-blue-600" />
+                                <div className="bg-blue-500/20 p-4 rounded-full">
+                                    <Users size={40} className="text-blue-400" />
                                 </div>
                             </div>
-                            <h2 className="text-2xl font-bold text-center mb-6">Acceso Logística</h2>
-                            <form onSubmit={handleLogin} className="space-y-4">
-                                <div>
-                                    <label className="block text-sm font-bold text-slate-500 mb-1">Seleccionar Usuario</label>
-                                    <select 
-                                        value={loginData.username}
-                                        onChange={(e) => setLoginData({...loginData, username: e.target.value})}
-                                        className="w-full p-3 rounded-lg border bg-slate-50 border-slate-200 outline-none focus:border-blue-500 font-medium"
-                                    >
-                                        <option value="Gustavo">Gustavo Recalde (Admin)</option>
-                                        <option value="Rodrigo">Rodrigo (Espejo)</option>
-                                        <option value="Emiliano">Emiliano (Espejo)</option>
-                                    </select>
-                                </div>
-                                <button type="submit" className="w-full py-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition-colors mt-4 shadow-lg shadow-blue-600/30">
-                                    Ingresar al Sistema
+                            <h2 className="text-3xl font-black text-center mb-2 tracking-wide">LOGÍSTICA</h2>
+                            <p className="text-slate-400 text-center mb-8 text-sm">Selecciona tu usuario para ingresar</p>
+                            
+                            <div className="space-y-4">
+                                <button 
+                                    onClick={() => { setUserRole('admin'); setAuthStep('app'); }} 
+                                    className="w-full p-4 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold transition-all flex items-center justify-between group shadow-lg shadow-blue-600/20"
+                                >
+                                    <span className="flex items-center gap-3"><Truck size={22}/> Gustavo</span>
+                                    <span className="text-xs font-black bg-blue-800/80 px-2 py-1 rounded text-blue-100">ADMINISTRADOR</span>
                                 </button>
-                            </form>
+                                
+                                <button 
+                                    onClick={() => { setUserRole('viewer'); setAuthStep('app'); }} 
+                                    className="w-full p-4 bg-slate-700 hover:bg-slate-600 rounded-xl font-bold transition-all flex items-center justify-between border border-slate-600"
+                                >
+                                    <span className="flex items-center gap-3"><Eye size={22}/> Rodrigo</span>
+                                    <span className="text-xs bg-slate-800 px-2 py-1 rounded text-slate-400">ESPEJO</span>
+                                </button>
+                                
+                                <button 
+                                    onClick={() => { setUserRole('viewer'); setAuthStep('app'); }} 
+                                    className="w-full p-4 bg-slate-700 hover:bg-slate-600 rounded-xl font-bold transition-all flex items-center justify-between border border-slate-600"
+                                >
+                                    <span className="flex items-center gap-3"><Eye size={22}/> Emiliano</span>
+                                    <span className="text-xs bg-slate-800 px-2 py-1 rounded text-slate-400">ESPEJO</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 );
