@@ -98,7 +98,7 @@
         // --- IMPORTACIONES DE FIREBASE ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- CONFIGURACIÓN DE FIREBASE ---
         let firebaseConfig;
@@ -192,6 +192,44 @@
         const INITIAL_ASSIGNMENTS = createEmptyAssignments();
 
         // --- COMPONENTES MODALES ---
+        
+        // Ventana para Confirmar Salida y agregar Observación
+        const DispatchModal = ({ isOpen, onClose, onConfirm, truckId, initialObservation, darkMode }) => {
+            const [obs, setObs] = useState('');
+            
+            useEffect(() => { 
+                if (isOpen) setObs(initialObservation || ''); 
+            }, [isOpen, initialObservation]);
+
+            if (!isOpen) return null;
+
+            return (
+                <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in`}>
+                    <div className={`${darkMode ? 'bg-slate-800 text-white' : 'bg-white text-slate-900'} w-full max-w-sm rounded-2xl shadow-2xl flex flex-col`}>
+                        <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex justify-between items-center bg-blue-50 dark:bg-slate-900/50 rounded-t-2xl">
+                            <h3 className="font-bold text-lg flex items-center gap-2"><Truck size={20}/> Despachar Móvil {truckId}</h3>
+                            <button onClick={onClose} className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full"><X size={20} /></button>
+                        </div>
+                        <div className="p-4">
+                            <p className="text-sm mb-3 font-medium opacity-80">¿Confirmas la salida de este móvil? Puedes dejar una observación si amerita.</p>
+                            <textarea 
+                                value={obs}
+                                onChange={(e) => setObs(e.target.value)}
+                                placeholder="Ej: Sale con retraso, falta un ayudante..."
+                                className="w-full p-3 rounded-xl border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-700 outline-none focus:border-blue-500 resize-none h-24 text-sm"
+                            ></textarea>
+                            <button 
+                                onClick={() => onConfirm(obs)}
+                                className="w-full mt-4 p-3 bg-green-600 hover:bg-green-500 text-white rounded-xl font-bold transition-all shadow-lg shadow-green-600/30 flex justify-center items-center gap-2"
+                            >
+                                <CheckCircle2 size={20}/> Confirmar Salida
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )
+        };
+
         const StaffSelectorModal = ({ isOpen, onClose, staffList, assignments, onAssign, onMarkAbsent, darkMode, isAdmin }) => {
             const [searchTerm, setSearchTerm] = useState('');
 
@@ -456,7 +494,7 @@
                                         className="w-full text-left p-3 rounded-lg flex items-center gap-3 hover:bg-red-50 text-red-600 dark:hover:bg-red-900/20 transition-colors mt-2 border-t border-slate-100 dark:border-slate-700"
                                     >
                                         <RotateCcw size={20} />
-                                        <span className="font-bold">Reiniciar Día (Borrar Todo)</span>
+                                        <span className="font-bold">Borrar TODO el día</span>
                                     </button>
                                 </>
                             )}
@@ -472,6 +510,7 @@
             const [darkMode, setDarkMode] = useState(false);
             const [currentView, setCurrentView] = useState('dashboard');
             const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+            const [globalSearch, setGlobalSearch] = useState('');
             
             // Estados de Autenticación
             const [firebaseUser, setFirebaseUser] = useState(null);
@@ -490,13 +529,13 @@
             const [showStaffModal, setShowStaffModal] = useState(false);
             const [showManageStaffModal, setShowManageStaffModal] = useState(false);
             const [showSettingsModal, setShowSettingsModal] = useState(false);
+            const [dispatchModal, setDispatchModal] = useState({ isOpen: false, truckId: null, observation: '' });
             
             const [newStaffData, setNewStaffData] = useState({ name: '', role: 'Ayudante', isDriver: false });
             const pdfLibraryLoaded = useRef(false);
 
             // 1. ADVERTENCIA AL RECARGAR Y CARGA DE FIREBASE
             useEffect(() => {
-                // Prevenir cierre accidental de pestaña o pull-to-refresh severo
                 const handleBeforeUnload = (e) => {
                     if (authStep === 'app') {
                         e.preventDefault();
@@ -508,18 +547,20 @@
 
                 const initAuth = async () => {
                     try {
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        // Usamos token si existe en la vista previa
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token && typeof __firebase_config !== 'undefined') {
                             try {
                                 await signInWithCustomToken(auth, __initial_auth_token);
-                            } catch (customTokenError) {
-                                console.warn("Custom token failed, falling back to anonymous auth");
+                            } catch (e) {
+                                console.warn("Falló inicio de sesión con token, usando anónimo...");
                                 await signInAnonymously(auth);
                             }
                         } else {
+                            // En GitHub usa siempre el login anónimo de tu Firebase
                             await signInAnonymously(auth);
                         }
                     } catch (e) {
-                        console.error("Auth error", e);
+                        console.error("Error conectando a Firebase:", e);
                     }
                 };
                 initAuth();
@@ -537,22 +578,37 @@
                 };
             }, [authStep]);
 
-            // 2. Sincronización en Tiempo Real (Efecto Espejo)
+            // 2. Sincronización en Tiempo Real (Efecto Espejo) y Lógica de "Copiar Día Anterior"
             useEffect(() => {
                 if (!firebaseUser || authStep !== 'app') return;
                 setIsDataLoaded(false);
 
-                // Escuchar datos del día
+                // Escuchar datos del día actual
                 const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'logistica_daily', date);
-                const unsubDaily = onSnapshot(docRef, (docSnap) => {
+                const unsubDaily = onSnapshot(docRef, async (docSnap) => {
                     if (docSnap.exists()) {
                         const data = docSnap.data();
                         setAssignments(data.assignments || INITIAL_ASSIGNMENTS);
                         setTruckStatus(data.truckStatus || {});
                         setAbsentStaffIds(new Set(data.absentStaffIds || []));
                     } else {
-                        // Si no hay datos en la nube para este día, inicializamos vacío
-                        setAssignments(createEmptyAssignments());
+                        // Si no hay datos (día en blanco) y es administrador: copiamos la última plantilla guardada.
+                        if (userRole === 'admin') {
+                            const latestRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'logistica_daily', 'latest_template');
+                            try {
+                                const latestSnap = await getDoc(latestRef);
+                                if (latestSnap.exists()) {
+                                    setAssignments(latestSnap.data().assignments || createEmptyAssignments());
+                                } else {
+                                    setAssignments(createEmptyAssignments());
+                                }
+                            } catch(e) {
+                                setAssignments(createEmptyAssignments());
+                            }
+                        } else {
+                            setAssignments(createEmptyAssignments());
+                        }
+                        // Status y ausencias se resetean aunque se copie la plantilla.
                         setTruckStatus({});
                         setAbsentStaffIds(new Set());
                     }
@@ -581,6 +637,7 @@
 
                 setSaveStatus('saving');
                 const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'logistica_daily', date);
+                const latestRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'logistica_daily', 'latest_template');
                 
                 const dataToSave = {
                     assignments,
@@ -588,8 +645,13 @@
                     absentStaffIds: Array.from(absentStaffIds)
                 };
                 
+                // Guardamos el día actual
                 setDoc(docRef, dataToSave, { merge: true })
-                    .then(() => setSaveStatus('saved'))
+                    .then(() => {
+                        // También actualizamos la "plantilla" base para los días siguientes
+                        setDoc(latestRef, { assignments }, { merge: true });
+                        setSaveStatus('saved');
+                    })
                     .catch(() => setSaveStatus('error'));
 
             }, [assignments, truckStatus, absentStaffIds, isDataLoaded, userRole, firebaseUser, date, authStep]);
@@ -598,12 +660,10 @@
             // --- Lógica de Negocio ---
             const getStaffById = (id) => staff.find(s => s.id === id);
 
-            // Calcula quiénes NO están ausentes (Para mostrar en las listas y modal de selección)
-            const getNonAbsentStaff = () => {
-                return staff.filter(s => !absentStaffIds.has(s.id));
-            };
+            // Calcula quiénes NO están ausentes
+            const getNonAbsentStaff = () => staff.filter(s => !absentStaffIds.has(s.id));
 
-            // Calcula quiénes están completamente libres y no asignados a nada (Para la caja de estadísticas)
+            // Calcula quiénes están libres (Para reporte)
             const getCompletelyFreeStaff = () => {
                 const assignedIds = new Set();
                 Object.values(assignments).forEach(truck => {
@@ -617,7 +677,7 @@
             
             const getAbsentStaff = () => staff.filter(s => absentStaffIds.has(s.id));
 
-            // Las acciones solo se ejecutan si es admin
+            // Acciones (Solo admin)
             const handleAssign = (personId) => {
                 if (userRole !== 'admin' || !selectedSlot) return;
                 const { truckId, slotType } = selectedSlot;
@@ -625,7 +685,6 @@
                 setAssignments(prev => {
                     const newAssignments = { ...prev };
                     
-                    // Si seleccionó a alguien, primero lo borramos de cualquier otro lugar donde estuviera
                     if (personId) {
                         Object.keys(newAssignments).forEach(tId => {
                             const truck = { ...newAssignments[tId] };
@@ -637,7 +696,6 @@
                         });
                     }
 
-                    // Ahora lo asignamos al nuevo slot
                     const targetTruck = { ...(newAssignments[truckId] || { driver: null, helper1: null, helper2: null, observation: "" }) };
                     targetTruck[slotType] = personId;
                     newAssignments[truckId] = targetTruck;
@@ -648,12 +706,30 @@
                 setSelectedSlot(null);
             };
 
-            const toggleTruckStatus = (truckId) => {
+            const handleTruckStatusClick = (truckId) => {
                 if (userRole !== 'admin') return;
-                setTruckStatus(prev => ({
-                    ...prev,
-                    [truckId]: prev[truckId] === 'departed' ? 'pending' : 'departed'
-                }));
+                const isDeparted = truckStatus[truckId] === 'departed';
+                if (isDeparted) {
+                    // Si ya salió, con un click lo devolvemos a "Pendiente"
+                    setTruckStatus(prev => ({ ...prev, [truckId]: 'pending' }));
+                } else {
+                    // Si está pendiente, abrimos la ventana de confirmación / observación
+                    const currentObs = assignments[truckId]?.observation || '';
+                    setDispatchModal({ isOpen: true, truckId, observation: currentObs });
+                }
+            };
+
+            const confirmDispatch = (observation) => {
+                const { truckId } = dispatchModal;
+                setAssignments(prev => {
+                    const newAssignments = { ...prev };
+                    const targetTruck = { ...(newAssignments[truckId] || { driver: null, helper1: null, helper2: null, observation: "" }) };
+                    targetTruck.observation = observation;
+                    newAssignments[truckId] = targetTruck;
+                    return newAssignments;
+                });
+                setTruckStatus(prev => ({ ...prev, [truckId]: 'departed' }));
+                setDispatchModal({ isOpen: false, truckId: null, observation: '' });
             };
 
             const markAsAbsent = (id) => {
@@ -689,17 +765,14 @@
                 setShowStaffModal(false);
             };
 
-            // --- GESTIÓN DE PERSONAL (Solo Admin) ---
+            // Gestión personal (Admin)
             const handleAddStaff = () => {
                 if (userRole !== 'admin' || !newStaffData.name.trim()) return;
                 const newId = staff.length > 0 ? Math.max(...staff.map(s => s.id)) + 1 : 1;
                 const newPerson = { ...newStaffData, id: newId, isFletero: false };
-                
                 const updatedStaffList = [...staff, newPerson];
                 setStaff(updatedStaffList);
                 setNewStaffData({ name: '', role: 'Ayudante', isDriver: false }); 
-                
-                // Guardar en Firestore
                 const staffRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'logistica_system', 'staff_directory');
                 setDoc(staffRef, { staffList: updatedStaffList });
             };
@@ -718,17 +791,13 @@
                         });
                         return newAssignments;
                     });
-                    
                     setAbsentStaffIds(prev => {
                         const newSet = new Set(prev);
                         newSet.delete(id);
                         return newSet;
                     });
-
                     const updatedStaffList = staff.filter(s => s.id !== id);
                     setStaff(updatedStaffList);
-
-                    // Guardar en Firestore
                     const staffRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'logistica_system', 'staff_directory');
                     setDoc(staffRef, { staffList: updatedStaffList });
                 }
@@ -738,15 +807,13 @@
                 if (userRole !== 'admin') return;
                 const updatedStaffList = staff.map(s => s.id === id ? { ...s, isDriver: !s.isDriver } : s);
                 setStaff(updatedStaffList);
-
-                // Guardar en Firestore
                 const staffRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'logistica_system', 'staff_directory');
                 setDoc(staffRef, { staffList: updatedStaffList });
             };
 
             const handleResetDay = () => {
                 if (userRole !== 'admin') return;
-                if (window.confirm("¿Estás seguro de que quieres REINICIAR todo el día?")) {
+                if (window.confirm("¿Estás seguro de que quieres REINICIAR todo el día? Se borrará todo.")) {
                     setAssignments(createEmptyAssignments());
                     setTruckStatus({});
                     setAbsentStaffIds(new Set());
@@ -771,14 +838,15 @@
                 doc.text(`Fecha: ${date}`, margin, currentY);
                 currentY += 15;
 
-                const tableHeaders = [["Móvil", "Entregador/Chofer", "Ayudante 1", "Ayudante 2"]];
+                const tableHeaders = [["Móvil", "Entregador/Chofer", "Ayudante 1", "Ayudante 2", "Observación"]];
                 const getTableData = (truckIds) => {
                     return truckIds.map(truckId => {
                         const data = assignments[truckId] || {};
                         const driver = data.driver ? getStaffById(data.driver)?.name || "-" : "-";
                         const h1 = data.helper1 ? getStaffById(data.helper1)?.name || "-" : "-";
                         const h2 = data.helper2 ? getStaffById(data.helper2)?.name || "-" : "-";
-                        return [truckId, driver, h1, h2];
+                        const obs = data.observation || "-";
+                        return [truckId, driver, h1, h2, obs];
                     });
                 };
 
@@ -800,22 +868,64 @@
                     currentY = doc.lastAutoTable.finalY + 10;
                 }
 
-                doc.setTextColor(150, 0, 0); 
-                doc.text("Camiones PENDIENTES", margin, currentY);
-                const pendingTrucks = INITIAL_TRUCKS.filter(id => truckStatus[id] !== 'departed');
-                
-                if (pendingTrucks.length > 0) {
+                // NUEVO CÓDIGO PARA MOSTRAR AUSENTES EN EL PDF
+                const absents = getAbsentStaff();
+                if (absents.length > 0) {
+                    doc.setFontSize(14);
+                    doc.setTextColor(150, 0, 0); 
+                    doc.text(`Personal Ausente (${absents.length})`, margin, currentY);
+                    currentY += 5;
+
+                    const absentHeaders = [["Nombre", "Rol Principal"]];
+                    const absentData = absents.map(p => [
+                        p.name + (p.isDriver ? " (Chofer)" : ""),
+                        p.role
+                    ]);
+
                     doc.autoTable({
-                        startY: currentY + 5,
-                        head: tableHeaders,
-                        body: getTableData(pendingTrucks),
+                        startY: currentY,
+                        head: absentHeaders,
+                        body: absentData,
                         theme: 'striped',
-                        headStyles: { fillColor: [183, 28, 28] }
+                        headStyles: { fillColor: [183, 28, 28] },
+                        styles: { fontSize: 10 }
                     });
                 }
 
                 doc.save(`logistica_reporte_${date}.pdf`);
             };
+
+            // --- FILTRADO PARA EL BUSCADOR GENERAL ---
+            const filteredTrucks = INITIAL_TRUCKS.filter(truckId => {
+                if (!globalSearch) return true;
+                const searchLower = globalSearch.toLowerCase();
+                
+                // Busca por nombre del camión
+                if (truckId.toLowerCase().includes(searchLower)) return true;
+                
+                const data = assignments[truckId];
+                if (!data) return false;
+                
+                // Busca por los tripulantes asignados
+                const driverName = getStaffById(data.driver)?.name?.toLowerCase() || '';
+                const h1Name = getStaffById(data.helper1)?.name?.toLowerCase() || '';
+                const h2Name = getStaffById(data.helper2)?.name?.toLowerCase() || '';
+                const obs = data.observation?.toLowerCase() || '';
+                
+                return driverName.includes(searchLower) || h1Name.includes(searchLower) || h2Name.includes(searchLower) || obs.includes(searchLower);
+            });
+
+            // NUEVO: FILTRADO DE PERSONAL SIN MÓVIL ASIGNADO
+            const unassignedStaffMatches = globalSearch ? staff.filter(p => {
+                const searchLower = globalSearch.toLowerCase();
+                if (!p.name.toLowerCase().includes(searchLower) && !p.role.toLowerCase().includes(searchLower)) return false;
+                
+                let inTruck = false;
+                Object.values(assignments).forEach(truck => {
+                    if (truck && (truck.driver === p.id || truck.helper1 === p.id || truck.helper2 === p.id)) inTruck = true;
+                });
+                return !inTruck;
+            }) : [];
 
             // --- PANTALLAS ---
 
@@ -845,7 +955,7 @@
                             <div className="space-y-4">
                                 <button 
                                     onClick={() => { setUserRole('admin'); setAuthStep('app'); }} 
-                                    className="w-full p-4 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold transition-all flex items-center justify-between group shadow-lg shadow-blue-600/20"
+                                    className="w-full p-4 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold transition-all flex items-center justify-between group shadow-lg shadow-blue-600/20 active:scale-95"
                                 >
                                     <span className="flex items-center gap-3"><Truck size={22}/> Gustavo</span>
                                     <span className="text-xs font-black bg-blue-800/80 px-2 py-1 rounded text-blue-100">ADMINISTRADOR</span>
@@ -853,7 +963,7 @@
                                 
                                 <button 
                                     onClick={() => { setUserRole('viewer'); setAuthStep('app'); }} 
-                                    className="w-full p-4 bg-slate-700 hover:bg-slate-600 rounded-xl font-bold transition-all flex items-center justify-between border border-slate-600"
+                                    className="w-full p-4 bg-slate-700 hover:bg-slate-600 rounded-xl font-bold transition-all flex items-center justify-between border border-slate-600 active:scale-95"
                                 >
                                     <span className="flex items-center gap-3"><Eye size={22}/> Rodrigo</span>
                                     <span className="text-xs bg-slate-800 px-2 py-1 rounded text-slate-400">ESPEJO</span>
@@ -861,7 +971,7 @@
                                 
                                 <button 
                                     onClick={() => { setUserRole('viewer'); setAuthStep('app'); }} 
-                                    className="w-full p-4 bg-slate-700 hover:bg-slate-600 rounded-xl font-bold transition-all flex items-center justify-between border border-slate-600"
+                                    className="w-full p-4 bg-slate-700 hover:bg-slate-600 rounded-xl font-bold transition-all flex items-center justify-between border border-slate-600 active:scale-95"
                                 >
                                     <span className="flex items-center gap-3"><Eye size={22}/> Emiliano</span>
                                     <span className="text-xs bg-slate-800 px-2 py-1 rounded text-slate-400">ESPEJO</span>
@@ -915,8 +1025,59 @@
 
                 {currentView === 'dashboard' && (
                     <main className="p-4 pb-24 max-w-6xl mx-auto">
+                    
+                    {/* BUSCADOR PRINCIPAL */}
+                    <div className="mb-6 relative">
+                        <Search className="absolute left-4 top-3.5 text-slate-400" size={20} />
+                        <input 
+                            type="text" 
+                            placeholder="Buscar móvil o persona..." 
+                            value={globalSearch}
+                            onChange={(e) => setGlobalSearch(e.target.value)}
+                            className={`w-full pl-12 pr-4 py-3 rounded-2xl border outline-none focus:border-blue-500 shadow-sm transition-all ${darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-800'}`}
+                        />
+                        {globalSearch && <button onClick={() => setGlobalSearch('')} className="absolute right-4 top-3.5 text-slate-400 hover:text-slate-600"><X size={20}/></button>}
+                    </div>
+
+                    {/* PERSONAL SIN ASIGNAR ENCONTRADO */}
+                    {globalSearch && unassignedStaffMatches.length > 0 && (
+                        <div className="mb-8 animate-fade-in">
+                            <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">Personal Encontrado (Sin Móvil)</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                                {unassignedStaffMatches.map(p => (
+                                    <div key={p.id} className={`p-3 rounded-xl border flex items-center justify-between ${absentStaffIds.has(p.id) ? 'bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800' : 'bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800'}`}>
+                                        <div>
+                                            <div className="font-bold text-slate-800 dark:text-slate-200">{p.name}</div>
+                                            <div className="text-xs text-slate-500">{p.role}</div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            {absentStaffIds.has(p.id) 
+                                                ? (
+                                                    <>
+                                                        <span className="text-[10px] font-bold text-red-600 bg-red-100 px-2 py-1 rounded shadow-sm">AUSENTE</span>
+                                                        {userRole === 'admin' && (
+                                                            <button onClick={() => markAsPresent(p.id)} className="p-1 text-red-400 hover:text-green-600 transition-colors font-bold text-[10px] uppercase" title="Marcar como Disponible">VOLVER</button>
+                                                        )}
+                                                    </>
+                                                )
+                                                : (
+                                                    <>
+                                                        <span className="text-[10px] font-bold text-blue-600 bg-blue-100 px-2 py-1 rounded shadow-sm">DISPONIBLE</span>
+                                                        {userRole === 'admin' && (
+                                                            <button onClick={() => markAsAbsent(p.id)} className="p-1 text-blue-400 hover:text-red-500 transition-colors" title="Marcar como Ausente"><UserX size={16}/></button>
+                                                        )}
+                                                    </>
+                                                )
+                                            }
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                        {INITIAL_TRUCKS.map(truckId => {
+                        {filteredTrucks.map(truckId => {
                         const data = assignments[truckId] || {};
                         const isDeparted = truckStatus[truckId] === 'departed';
                         
@@ -934,7 +1095,7 @@
                                     {isDeparted && <span className="text-xs font-bold text-green-600 flex items-center gap-1 bg-green-100 px-2 py-1 rounded-full"><CheckCircle2 size={12}/> EN RUTA</span>}
                                 </div>
                                 <button 
-                                    onClick={() => toggleTruckStatus(truckId)}
+                                    onClick={() => handleTruckStatusClick(truckId)}
                                     disabled={userRole !== 'admin'}
                                     className={`p-2 rounded-full transition-all ${isDeparted ? 'bg-green-500 text-white shadow-lg scale-110' : 'bg-slate-100 text-slate-400 dark:bg-slate-700'} ${userRole !== 'admin' ? 'cursor-default' : 'active:scale-95'}`}
                                 >
@@ -977,10 +1138,23 @@
                                         )}
                                     </div>
                                 ))}
+
+                                {/* Observaciones */}
+                                {data.observation && (
+                                    <div className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded text-xs text-yellow-700 dark:text-yellow-400 italic">
+                                        <span className="font-bold">Obs:</span> {data.observation}
+                                    </div>
+                                )}
                             </div>
                             </div>
                         );
                         })}
+                        {filteredTrucks.length === 0 && unassignedStaffMatches.length === 0 && (
+                            <div className="col-span-full py-12 text-center text-slate-400">
+                                <Search size={48} className="mx-auto opacity-20 mb-4" />
+                                <p>No se encontraron resultados para "{globalSearch}"</p>
+                            </div>
+                        )}
                     </div>
                     </main>
                 )}
@@ -1044,9 +1218,9 @@
                                 <ul className={`space-y-2 max-h-[300px] overflow-y-auto p-2 rounded-xl border ${darkMode ? 'border-red-900/30 bg-red-900/10' : 'border-red-100 bg-red-50'}`}>
                                     {getAbsentStaff().map(p => (
                                         <li key={p.id} className="flex items-center justify-between p-2 rounded bg-white dark:bg-slate-700 shadow-sm border border-red-100 dark:border-red-900/30">
-                                            <div className="flex items-center gap-3 opacity-60">
-                                                <UserX size={16} className="text-red-400"/>
-                                                <span className="font-bold line-through decoration-red-500">{p.name}</span>
+                                            <div className="flex items-center gap-3">
+                                                <UserX size={16} className="text-red-500"/>
+                                                <span className="font-bold text-slate-800 dark:text-slate-200">{p.name}</span>
                                             </div>
                                             {userRole === 'admin' && (
                                                 <button onClick={() => markAsPresent(p.id)} className="p-1 text-red-300 hover:text-green-500 transition-colors font-bold text-xs" title="Marcar como Presente">VOLVER</button>
@@ -1070,6 +1244,15 @@
                     </div>
                     </main>
                 )}
+
+                <DispatchModal 
+                    isOpen={dispatchModal.isOpen}
+                    onClose={() => setDispatchModal({ isOpen: false, truckId: null, observation: '' })}
+                    onConfirm={confirmDispatch}
+                    truckId={dispatchModal.truckId}
+                    initialObservation={dispatchModal.observation}
+                    darkMode={darkMode}
+                />
 
                 <StaffSelectorModal 
                     isOpen={showStaffModal} 
