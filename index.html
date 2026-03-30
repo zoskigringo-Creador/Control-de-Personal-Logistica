@@ -58,6 +58,20 @@
         const blob = new Blob([stringManifest], {type: 'application/json'});
         const manifestURL = URL.createObjectURL(blob);
         document.querySelector('#my-manifest').setAttribute('href', manifestURL);
+
+        // BLOQUEO CRÍTICO DE PULL-TO-REFRESH (Especial para Android Chrome)
+        let startY = 0;
+        document.addEventListener('touchstart', e => {
+            startY = e.touches[0].pageY;
+        }, { passive: false });
+
+        document.addEventListener('touchmove', e => {
+            const y = e.touches[0].pageY;
+            // Si estamos arriba del todo y el usuario desliza hacia abajo, bloqueamos la recarga
+            if (document.documentElement.scrollTop === 0 && document.body.scrollTop === 0 && y > startY) {
+                e.preventDefault();
+            }
+        }, { passive: false });
     </script>
 
     <style>
@@ -69,7 +83,6 @@
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
         
-        /* BLOQUEO CRÍTICO DE PULL-TO-REFRESH PARA IPHONE Y SAMSUNG */
         html, body { 
             overscroll-behavior-y: none !important; 
             overscroll-behavior: none !important;
@@ -92,7 +105,7 @@
             Truck, Users, Moon, Sun, FileSpreadsheet, FileText, CheckCircle2, 
             AlertCircle, UserMinus, UserX, UserPlus, Settings, X, Search, 
             Plus, ToggleLeft, ToggleRight, Trash2, RotateCcw, 
-            Cloud, Check, Loader2, ClipboardCheck, Eye
+            Cloud, Check, Loader2, ClipboardCheck, Eye, LogOut, Smartphone
         } from 'lucide-react';
 
         // --- IMPORTACIONES DE FIREBASE ---
@@ -454,7 +467,7 @@
             );
         };
 
-        const SettingsModal = ({ isOpen, onClose, darkMode, toggleTheme, onOpenManageStaff, onResetDay, isAdmin }) => {
+        const SettingsModal = ({ isOpen, onClose, darkMode, toggleTheme, onOpenManageStaff, onResetDay, isAdmin, onLogout, installPrompt, handleInstallApp }) => {
             if (!isOpen) return null;
             
             return (
@@ -498,6 +511,24 @@
                                     </button>
                                 </>
                             )}
+                            
+                            {installPrompt && (
+                                <button 
+                                    onClick={() => { onClose(); handleInstallApp(); }}
+                                    className="w-full text-left p-3 rounded-lg flex items-center gap-3 hover:bg-green-50 text-green-600 dark:hover:bg-green-900/20 transition-colors mt-2 border-t border-slate-100 dark:border-slate-700"
+                                >
+                                    <Smartphone size={20} />
+                                    <span className="font-bold">Instalar App</span>
+                                </button>
+                            )}
+
+                            <button 
+                                onClick={() => { onClose(); onLogout(); }}
+                                className="w-full text-left p-3 rounded-lg flex items-center gap-3 hover:bg-red-50 text-red-600 dark:hover:bg-red-900/20 transition-colors mt-2 border-t border-slate-100 dark:border-slate-700"
+                            >
+                                <LogOut size={20} />
+                                <span className="font-bold">Cerrar Sesión</span>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -531,11 +562,21 @@
             const [showSettingsModal, setShowSettingsModal] = useState(false);
             const [dispatchModal, setDispatchModal] = useState({ isOpen: false, truckId: null, observation: '' });
             
+            // Para el modo PWA Instalable
+            const [deferredPrompt, setDeferredPrompt] = useState(null);
+
             const [newStaffData, setNewStaffData] = useState({ name: '', role: 'Ayudante', isDriver: false });
             const pdfLibraryLoaded = useRef(false);
 
-            // 1. ADVERTENCIA AL RECARGAR Y CARGA DE FIREBASE
+            // 1. ADVERTENCIA AL RECARGAR, CARGA DE FIREBASE Y PWA
             useEffect(() => {
+                // Escuchar cuando el navegador ofrece instalar la app (PWA)
+                const handleBeforeInstallPrompt = (e) => {
+                    e.preventDefault();
+                    setDeferredPrompt(e);
+                };
+                window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
                 const handleBeforeUnload = (e) => {
                     if (authStep === 'app') {
                         e.preventDefault();
@@ -575,6 +616,7 @@
                 return () => {
                     unsubscribe();
                     window.removeEventListener('beforeunload', handleBeforeUnload);
+                    window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
                 };
             }, [authStep]);
 
@@ -763,6 +805,20 @@
                 const currentPersonId = assignments[truckId]?.[slotType];
                 if (currentPersonId) markAsAbsent(currentPersonId);
                 setShowStaffModal(false);
+            };
+
+            const handleLogout = () => {
+                setAuthStep('login');
+                setUserRole(null);
+            };
+
+            const handleInstallApp = async () => {
+                if (!deferredPrompt) return;
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    setDeferredPrompt(null);
+                }
             };
 
             // Gestión personal (Admin)
@@ -1286,6 +1342,9 @@
                     onOpenManageStaff={() => setShowManageStaffModal(true)}
                     onResetDay={handleResetDay}
                     isAdmin={userRole === 'admin'}
+                    onLogout={handleLogout}
+                    installPrompt={deferredPrompt}
+                    handleInstallApp={handleInstallApp}
                 />
 
                 <div className="fixed bottom-6 right-6 lg:hidden z-50">
